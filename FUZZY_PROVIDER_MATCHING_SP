@@ -1,0 +1,252 @@
+CREATE OR REPLACE PROCEDURE DEV_PROVIDER_REGISTRY_CLONE_GALAXE.DBO.FUZZY_PROVIDER_MATCHING()
+RETURNS VARCHAR(16777216)
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.8'
+PACKAGES = ('pandas','snowflake-snowpark-python','fuzzywuzzy','numpy')
+HANDLER = 'ProviderMatching'
+EXECUTE AS OWNER
+AS '
+import snowflake.snowpark as sf
+import pandas as pd
+from fuzzywuzzy import process as rfProcess 
+from copy import copy
+import pandas as pd
+import numpy as np
+from fuzzywuzzy import fuzz
+from snowflake.snowpark.functions import table_function
+from snowflake.snowpark import functions as F
+from snowflake.snowpark.types import *
+import time
+
+
+class SFDatabase:
+
+    def __init__(self, session):
+        self.session = session
+       
+    def Read_DB_Data(self, state='''' ,providerType='''',check=True):
+        if (state):
+            if (providerType):                
+                if(providerType==''1''):
+                    self.pr_df = self.session.sql(
+                        f"SELECT  PROVIDER.PROVIDERID, FIRSTNAME, LASTNAME, PROVIDERADDRESSID, STREET1, STREET2, CITY, ZIPCODE,STATE FROM PROVIDER \\
+                        INNER JOIN PROVIDERADDRESS ON PROVIDER.PROVIDERID = PROVIDERADDRESS.PROVIDERID  \\
+                        WHERE State=''{state}'' AND PROVIDERTYPE = {providerType}"
+                        ).toPandas()
+                    
+                    if not self.pr_df.empty :
+                        # print(self.pr_df)
+                        self.pr_df[''ZIPCODE_5'']=np.where(self.pr_df[''ZIPCODE''].fillna('''').astype(str).str.len() <= 5, 
+                            self.pr_df[''ZIPCODE''],
+                            self.pr_df[''ZIPCODE''].astype(str).str[:5])
+
+                        self.pr_df[''NAME_PR''] = self.pr_df[''FIRSTNAME''] + '' '' + self.pr_df[''LASTNAME'']
+                        self.pr_df[''ADDRESS_PR''] = self.pr_df[''STREET1''].fillna('''')+'' ''+self.pr_df[''STREET2''].fillna('''') +'' ''+self.pr_df[''CITY''].fillna('''') +'' ''+self.pr_df[''ZIPCODE_5''].fillna('''') 
+                    
+                        self.pr_df[''DETAILS_PR''] = self.pr_df[''FIRSTNAME''] + '' '' + self.pr_df[''LASTNAME'']+'' ''+self.pr_df[''STREET1''].fillna('''')+'' ''+self.pr_df[''STREET2''].fillna('''') +'' ''+self.pr_df[''CITY''].fillna('''') +'' ''+self.pr_df[''ZIPCODE_5''].fillna('''') 
+                        self.pr_df[''DETAILS_PR''].astype(''string[pyarrow]'')
+                        self.pr_df.set_index(''DETAILS_PR'',inplace =False)
+                        self.pr_df.dropna(subset=[''DETAILS_PR''], how=''any'', inplace=True)
+                        self.pr_df.dropna(subset=[''ADDRESS_PR''], how=''any'', inplace=True)
+                       
+                        if not self.pr_df.empty:     
+                            if  check==False :  
+                                                           
+                                self.session.write_pandas(self.pr_df, ''PROVIDER_DATAFRAME'',auto_create_table=True)
+                                self.df_PROVIDER=self.session.table(''PROVIDER_DATAFRAME'',)                                                                                           
+                    
+                        self.sm_df = self.session.sql(
+                        f"SELECT IMPORTID, FIRSTNAME ,LASTNAME, Address, Suite, City, Zip,STATE FROM DBT_RMURAHARISETTY.STANDAREDMAPPER \\
+                            WHERE PROVIDERID IS NULL AND State=''{state}'' AND PROVIDERTYPE = {providerType}  \\
+                            AND IMPORTID NOT IN (SELECT IMPORTID FROM PROVIDERSTANDARDMAPPER_SDF)\\
+                            AND IMPORTID NOT IN (SELECT IMPORTID FROM PROB_SM_USED_DATA_SDF)"
+                            ).toPandas()   
+                    
+                        if not self.sm_df.empty:    
+                            self.sm_df_matched=  self.sm_df[''IMPORTID''].copy()                                                                       
+                            self.sm_df[''ZIP_5'']=np.where(self.sm_df[''ZIP''].fillna('''').astype(str).str.len() <= 5, 
+                            self.sm_df[''ZIP''],
+                            self.sm_df[''ZIP''].astype(str).str[:5])                                
+                            self.sm_df[''NAME_SM'']=self.sm_df[''FIRSTNAME''] + '' '' + self.sm_df[''LASTNAME'']  
+                            self.sm_df[''ADDRESS_SM''] = self.sm_df[''ADDRESS''].fillna('''')+'' ''+self.sm_df[''SUITE''].fillna('''')+'' ''+self.sm_df[''CITY''].fillna('''')+'' ''+self.sm_df[''ZIP_5''].fillna('''')
+                            self.sm_df[''DETAILS_SM''] = self.sm_df[''FIRSTNAME''] + '' '' + self.sm_df[''LASTNAME'']+'' ''+self.sm_df[''ADDRESS''].fillna('''')+'' ''+self.sm_df[''SUITE''].fillna('''')+'' ''+self.sm_df[''CITY''].fillna('''')+'' ''+self.sm_df[''ZIP_5''].fillna('''')
+                            self.sm_df[''DETAILS_SM''].astype(''string[pyarrow]'')
+                            self.sm_df.set_index(''DETAILS_SM'',inplace =False)
+                            self.sm_df.dropna(subset=[''DETAILS_SM''], how=''any'', inplace=True)
+                            self.sm_df.dropna(subset=[''ADDRESS_SM''], how=''any'', inplace=True)
+
+                        if not self.sm_df.empty: 
+                            if  check==False :                                 
+                                                            
+                                self.session.write_pandas(self.sm_df, ''STANDAREDMAPPER_DATAFRAME'',auto_create_table=True)
+                                self.df_STANDARDMAPPER=self.session.table(''STANDAREDMAPPER_DATAFRAME'')
+                
+                if(providerType==''2''):
+                    self.pr_df = self.session.sql(
+                        f"SELECT  PROVIDER.PROVIDERID,FACILITYNAME, PROVIDERADDRESSID, STREET1, STREET2, CITY, ZIPCODE,STATE FROM PROVIDER \\
+                            INNER JOIN PROVIDERADDRESS ON PROVIDER.PROVIDERID = PROVIDERADDRESS.PROVIDERID  \\
+                            WHERE State=''{state}'' AND PROVIDERTYPE = {providerType}"
+                        ).toPandas()
+                    
+                    if not self.pr_df.empty :
+
+                        # print(self.pr_df)
+                        self.pr_df[''ZIPCODE_5'']=np.where(self.pr_df[''ZIPCODE''].fillna('''').astype(str).str.len() <= 5, 
+                            self.pr_df[''ZIPCODE''],
+                            self.pr_df[''ZIPCODE''].astype(str).str[:5])
+
+                        self.pr_df[''NAME_PR''] = self.pr_df[''FACILITYNAME''] 
+                        self.pr_df[''ADDRESS_PR''] = self.pr_df[''STREET1''].fillna('''')+'' ''+self.pr_df[''STREET2''].fillna('''') +'' ''+self.pr_df[''CITY''].fillna('''') +'' ''+self.pr_df[''ZIPCODE_5''].fillna('''') 
+                    
+                        self.pr_df[''DETAILS_PR''] = self.pr_df[''FACILITYNAME''] +self.pr_df[''STREET1''].fillna('''')+'' ''+self.pr_df[''STREET2''].fillna('''') +'' ''+self.pr_df[''CITY''].fillna('''') +'' ''+self.pr_df[''ZIPCODE_5''].fillna('''') 
+                        self.pr_df[''DETAILS_PR''].astype(''string[pyarrow]'')
+                        self.pr_df.set_index(''DETAILS_PR'',inplace =False)
+                        self.pr_df.dropna(subset=[''DETAILS_PR''], how=''any'', inplace=True)
+                        self.pr_df.dropna(subset=[''ADDRESS_PR''], how=''any'', inplace=True)
+
+                        if  check==False :  
+                          
+                            self.session.write_pandas(self.pr_df, ''PROVIDER_DATAFRAME'',auto_create_table=True)
+                            self.df_PROVIDER=self.session.table(''PROVIDER_DATAFRAME'',)
+                                                                                        
+                    
+                        self.sm_df = self.session.sql(
+                        f"SELECT IMPORTID, FACILITYNAME Address, Suite, City, Zip,STATE FROM DBT_RMURAHARISETTY.STANDAREDMAPPER \\
+                            WHERE PROVIDERID IS NULL AND State=''{state}'' AND PROVIDERTYPE = {providerType}  \\
+                            AND IMPORTID NOT IN (SELECT IMPORTID FROM PROVIDERSTANDARDMAPPER_SDF)\\
+                            AND IMPORTID NOT IN (SELECT IMPORTID FROM PROB_SM_USED_DATA_SDF)"
+                            ).toPandas()   
+                        self.sm_df_matched=  self.sm_df[''IMPORTID''].copy() 
+
+                        if not self.sm_df.empty:                                                                          
+                            self.sm_df[''ZIP_5'']=np.where(self.sm_df[''ZIP''].fillna('''').astype(str).str.len() <= 5, 
+                            self.sm_df[''ZIP''],
+                            self.sm_df[''ZIP''].astype(str).str[:5])                                
+                            self.sm_df[''NAME_SM'']=self.sm_df[''FACILITYNAME''] 
+                            self.sm_df[''ADDRESS_SM''] = self.sm_df[''ADDRESS''].fillna('''')+'' ''+self.sm_df[''SUITE''].fillna('''')+'' ''+self.sm_df[''CITY''].fillna('''')+'' ''+self.sm_df[''ZIP_5''].fillna('''')
+                            self.sm_df[''DETAILS_SM''] = self.sm_df[''FACILITYNAME''] +'' ''+self.sm_df[''ADDRESS''].fillna('''')+'' ''+self.sm_df[''SUITE''].fillna('''')+'' ''+self.sm_df[''CITY''].fillna('''')+'' ''+self.sm_df[''ZIP_5''].fillna('''')
+                            self.sm_df[''DETAILS_SM''].astype(''string[pyarrow]'')
+                            self.sm_df.dropna(subset=[''DETAILS_SM''], how=''any'', inplace=True)
+                            self.sm_df.dropna(subset=[''ADDRESS_SM''], how=''any'', inplace=True)
+
+                            if  check==False :  
+                               
+                                self.session.write_pandas(self.sm_df, ''STANDAREDMAPPER_DATAFRAME'',auto_create_table=True)
+                                self.df_STANDARDMAPPER=self.session.table(''STANDAREDMAPPER_DATAFRAME'',)
+                                
+     
+    
+    def MatchDetails_SnowPark_DF(self,Threshhold='''',ProviderType=''''):
+        if not self.sm_df.empty:             
+                if not self.pr_df.empty :   
+                    if(ProviderType==''1'') :
+                        self.DataSetID=1
+                    else:                        
+                        self.DataSetID=2 
+
+                    crossJoinedData = self.df_STANDARDMAPPER.select("DETAILS_SM").crossJoin(self.df_PROVIDER.select("DETAILS_PR"))  
+                    crossJoinedData.create_or_replace_view("CROSS_JOINED_Fuzzy_UDTF")
+                    
+                    fuzzy_wuzzy_udtf = table_function("fuzzywuzzy_value_udtf")
+                    result = crossJoinedData.join_table_function(fuzzy_wuzzy_udtf(crossJoinedData.col("DETAILS_PR"), crossJoinedData.col("DETAILS_SM"))\\
+                        .over(partition_by="DETAILS_PR",order_by="DETAILS_PR"))
+
+                    result_pd=result.select(result.SOURCE.alias("DETAILS_PR"),result.SCORE.alias(''CONFIDENCE_SCORE''), result.MATCHED.alias(''DETAILS_SM''))\\
+                        .filter(result.SCORE>80).to_pandas()                        
+                  
+                    self.final_df =result_pd.merge(self.df_PROVIDER.toPandas(),on=''DETAILS_PR'').merge(self.df_STANDARDMAPPER.toPandas(),on=''DETAILS_SM'')\\
+                        .drop_duplicates().sort_values(by=''CONFIDENCE_SCORE'', ascending=False)
+
+                    dropsm = self.session.sql(f"DROP TABLE STANDAREDMAPPER_DATAFRAME")
+                    dropsm.collect()  
+
+                    droppr = self.session.sql(f"DROP TABLE PROVIDER_DATAFRAME")
+                    droppr.collect()
+
+                   
+                    self.final_df.drop(
+                    axis=1 ,
+                    columns=[''FIRSTNAME_x'',''LASTNAME_x'',''FIRSTNAME_y'',''LASTNAME_y'',
+                    ''CITY_x'',''CITY_y'',''STATE_x'',''STATE_y'',''ADDRESS'',''SUITE'',''STREET1'',''STREET2'',''ZIP_5'',''ZIPCODE_5''], 
+                    inplace=True
+                    )     
+                   
+                    self.final_df.dropna(subset=[''PROVIDERID''], how=''any'', inplace=True)
+                    self.final_df[''CONTAINERID''] = 2
+                    self.final_df[''DATASETID''] = self.DataSetID                     
+                    self.final_df[''STATUS''] = 0
+                    self.final_df[''MATCHEDON''] = 0
+     
+    def Update_OthersScore(self):
+        if not self.sm_df.empty:             
+                if not self.pr_df.empty :
+                        if not self.final_df.empty:
+                            self.final_df[''NAME_CONFIDENCE_SCORE'']= \\
+                            self.final_df.apply(lambda x:fuzz.token_sort_ratio(x["NAME_SM"].upper(), x["NAME_PR"].upper()),axis=1)
+                    
+                            self.final_df[''ADDRESS_CONFIDENCE_SCORE'']= \\
+                            self.final_df.apply(lambda x:fuzz.ratio(x["ADDRESS_SM"].upper(), x["ADDRESS_PR"].upper()),axis=1)
+    def ToSnowflake_PSM(self):
+       if not self.sm_df.empty:             
+                if not self.pr_df.empty :
+                        if not self.final_df.empty:
+                         self.session.write_pandas(self.final_df, ''PROVIDERSTANDARDMAPPER_SDF'')
+                         
+    def ToSnowflake_Pro_Used_SMDATA(self):       
+        if not self.sm_df_matched.empty:              
+                self.session.write_pandas(pd.DataFrame(self.sm_df_matched), ''PROB_SM_USED_DATA_SDF'')                    
+     
+    def GetStateList(self,providerType):
+         self.states = self.session.sql(
+                    f"SELECT  DISTINCT STATE  FROM DBT_RMURAHARISETTY.STANDAREDMAPPER \\
+                        WHERE PROVIDERID IS NULL  AND PROVIDERTYPE = ''{providerType}''  \\
+                        AND IMPORTID NOT IN (SELECT IMPORTID FROM PROVIDERSTANDARDMAPPER_SDF)\\
+                        AND IMPORTID NOT IN (SELECT IMPORTID FROM PROB_SM_USED_DATA_SDF) \\
+                        ORDER BY STATE"
+                    ).toPandas()    
+        
+def ProviderMatching(session):
+
+    start = time.time()
+    db = SFDatabase(session)  
+    Threshhold=80
+    operation="Matching Main "  
+    msg="Started"
+    db.session.sql(f"INSERT INTO LOGS_SDF (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()     
+    for providerType in range(1, 2, 1):
+        providerType = str(providerType)  
+        operation="Details"       
+        states = db.GetStateList(providerType) 
+        operation="State List Count ::"+str(db.states.size)
+        db.session.sql(f"INSERT INTO LOGS_SDF (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect() 
+        for state in db.states[''STATE'']:              
+                db.Read_DB_Data(state, providerType,True)          
+                pr_row=len(db.pr_df)
+                if (pr_row>0) :
+                  sm_row = len(db.sm_df)
+                  operation="Details"
+                  msg="Total PR Data ::"+str(pr_row)+" Total SM Data ::"+ str(sm_row)+" State ::"+str(state)+" ProviderType ::"+str(providerType)
+                  db.session.sql(f"INSERT INTO LOGS_SDF (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()               
+                  providerType = str(providerType)               
+                  operation="Read Data"
+                  msg="Start"
+                  db.session.sql(f"INSERT INTO LOGS_SDF (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()
+                  db.Read_DB_Data(state,  providerType,False)   
+                  operation="Matching Data"
+                  msg="Start"
+                  db.session.sql(f"INSERT INTO LOGS_SDF (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()
+                  db.MatchDetails_SnowPark_DF(Threshhold,providerType)   
+                  db.Update_OthersScore()                            
+                  msg="END"
+                  db.session.sql(f"INSERT INTO LOGS_SDF (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()
+                  operation="Write to Snowflake"
+                  msg="Start"
+                  print("Write to  Snowflake Start")
+                  db.session.sql(f"INSERT INTO LOGS (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()                
+                  db.ToSnowflake_PSM()
+                  db.ToSnowflake_Pro_Used_SMDATA()
+                  msg="end"
+                  print("Write to  Snowflake END")
+                  db.session.sql(f"INSERT INTO LOGS (TIME, OPERATION, LOG) VALUES (CURRENT_TIMESTAMP(3), ''{operation}'', ''{msg}'')").collect()     
+    db.close()    
+';
